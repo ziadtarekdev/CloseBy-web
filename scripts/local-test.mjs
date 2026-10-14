@@ -262,13 +262,43 @@ const payloadChecks = {
       location: { lat: 51.5, lng: -0.12 },
       nurseryId: NURSERY,
       childId: CHILD,
+      kind: 'lost',
     });
   },
 
   'sends location null when location was denied or unavailable': () => {
     const report = buildFoundReport(loadedProfile, null, 'ts');
     assert.equal(report.location, null);
-    assert.deepEqual(Object.keys(report).sort(), ['at', 'childId', 'location', 'nurseryId']);
+    assert.deepEqual(Object.keys(report).sort(), ['at', 'childId', 'kind', 'location', 'nurseryId']);
+  },
+
+  'a scan carries no location and no comment, whatever it is given': () => {
+    const report = buildFoundReport(loadedProfile, GEO_FIX, 'ts', { kind: 'scan', comment: 'hi' });
+    assert.deepEqual(report, {
+      at: 'ts',
+      location: null,
+      nurseryId: NURSERY,
+      childId: CHILD,
+      kind: 'scan',
+    });
+  },
+
+  'a lost report carries the comment trimmed and capped, and omits a blank one': () => {
+    const report = buildFoundReport(loadedProfile, null, 'ts', {
+      kind: 'lost',
+      comment: '  By the park gate  ',
+    });
+    assert.equal(report.comment, 'By the park gate');
+    assert.equal(
+      buildFoundReport(loadedProfile, null, 'ts', { kind: 'lost', comment: 'x'.repeat(900) })
+        .comment.length,
+      500,
+    );
+    assert.equal('comment' in buildFoundReport(loadedProfile, null, 'ts', { comment: '   ' }), false);
+  },
+
+  'refuses an unknown kind': () => {
+    assert.throws(() => buildFoundReport(loadedProfile, null, 'ts', { kind: 'found' }));
   },
 
   'never sends an undefined coordinate': () => {
@@ -524,16 +554,18 @@ const ownerChecks = {
     );
   },
 
-  'cannot publish a guardian’s phone number': async (owner) => {
+  'cannot publish a field outside the public list': async (owner) => {
     // The reason the public copy is a separate document at all. A Firestore get
     // returns every field, so the only defence is refusing to store one here.
+    // The guardian's name and phone are on the list on purpose; nothing else
+    // from the private record is.
     await assertFails(
       setDoc(doc(owner, 'publicProfiles', `${NURSERY}~sneaky1`), {
         nurseryId: NURSERY,
         childId: 'sneaky1',
         name: 'Yusuf Karim',
         group: 'Rainbows',
-        guardianPhone: '07700 900123',
+        homeAddress: '1 Example Street',
       }),
     );
   },
@@ -876,6 +908,8 @@ await check('the public contact can be copied onto a live page, and read by a fi
         childId: CHILD,
         name: 'Amina H.',
         group: 'Sunflowers',
+        guardianName: 'Yusuf Karim',
+        guardianPhone: '07700 900123',
         nurseryName: 'Sunny Steps Nursery',
         nurseryPhone: '+20 100 000 0000',
       },
@@ -884,7 +918,7 @@ await check('the public contact can be copied onto a live page, and read by a fi
   );
   const page = await assertSucceeds(getDoc(doc(anon, 'publicProfiles', profileId)));
   assert.equal(page.data().nurseryPhone, '+20 100 000 0000');
-  assert.equal(page.data().guardianPhone, undefined);
+  assert.equal(page.data().guardianPhone, '07700 900123');
 
   // Clearing the phone in settings deletes it from the page.
   await assertSucceeds(
@@ -1007,6 +1041,8 @@ await check('issues a QR exactly as generateQr writes it', async () => {
     childId: CYCLE_CHILD,
     name: 'Amina Hassan',
     group: 'Sunflowers',
+    guardianName: 'Yusuf Karim',
+    guardianPhone: '07700 900123',
     ...CONTACT,
     createdAt: serverTimestamp(),
   });
@@ -1025,7 +1061,7 @@ await check('shows a finder only the safe copy of the child', async () => {
   const profile = await assertSucceeds(getDoc(cycleProfileRef));
   assert.deepEqual(
     Object.keys(profile.data()).sort(),
-    ['childId', 'createdAt', 'group', 'name', 'nurseryId', 'nurseryName', 'nurseryPhone'],
+    ['childId', 'createdAt', 'group', 'guardianName', 'guardianPhone', 'name', 'nurseryId', 'nurseryName', 'nurseryPhone'],
     'the public document must hold the whitelist and nothing else',
   );
 
@@ -1064,7 +1100,7 @@ await check('the nursery finds the sighting in its reports query', async () => {
   assert.ok(report, 'the cycle sighting must be in the nursery-wide query');
   assert.deepEqual(
     Object.keys(report.data()).sort(),
-    ['at', 'childId', 'location', 'nurseryId'],
+    ['at', 'childId', 'kind', 'location', 'nurseryId'],
     'a sighting carries the report and nothing about the finder',
   );
 });
@@ -1095,6 +1131,8 @@ await check('an edit reaches the printed page via the republish', async () => {
       childId: CYCLE_CHILD,
       name: 'Amina Saad',
       group: 'Sunflowers',
+      guardianName: 'Yusuf Karim',
+      guardianPhone: '07700 900123',
       ...CONTACT,
     },
     { merge: true },
@@ -1105,7 +1143,7 @@ await check('an edit reaches the printed page via the republish', async () => {
   assert.equal(profile.data().name, 'Amina Saad');
   assert.deepEqual(
     Object.keys(profile.data()).sort(),
-    ['childId', 'createdAt', 'group', 'name', 'nurseryId', 'nurseryName', 'nurseryPhone'],
+    ['childId', 'createdAt', 'group', 'guardianName', 'guardianPhone', 'name', 'nurseryId', 'nurseryName', 'nurseryPhone'],
   );
 });
 
@@ -1275,6 +1313,69 @@ await check('another nursery still cannot delete an existing page', async () => 
 await check('a finder cannot delete a page, present or not', async () => {
   await assertFails(deleteDoc(doc(anon, 'publicProfiles', `${NURSERY}~${NO_CODE_CHILD}`)));
   await assertFails(deleteDoc(doc(anon, 'publicProfiles', GONE_LEGACY_TOKEN)));
+});
+
+// ═══ Report kinds — the scan alert and the lost alert ═══════════════════════
+//
+// The page files a 'scan' on its own when it opens and a 'lost' report when the
+// finder presses "This child is lost". The rules keep a scan bare — no
+// location, no comment, since nobody was asked for either — and cap the
+// comment on a lost report.
+
+const kindReports = collection(anon, 'publicProfiles', `${NURSERY}~${NO_CODE_CHILD}`, 'foundReports');
+const kindProfile = { id: `${NURSERY}~${NO_CODE_CHILD}`, nurseryId: NURSERY, childId: NO_CODE_CHILD };
+
+console.log('\nRules — scan alerts and lost alerts');
+
+await check('accepts the scan alert the page files on opening', async () => {
+  await assertSucceeds(
+    addDoc(kindReports, buildFoundReport(kindProfile, null, serverTimestamp(), { kind: 'scan' })),
+  );
+});
+
+await check('accepts a lost alert with a location and a comment', async () => {
+  await assertSucceeds(
+    addDoc(
+      kindReports,
+      buildFoundReport(kindProfile, GEO_FIX, serverTimestamp(), {
+        kind: 'lost',
+        comment: 'By the bakery, red jacket.',
+      }),
+    ),
+  );
+});
+
+await check('refuses a scan carrying a location or a comment', async () => {
+  const base = { at: serverTimestamp(), nurseryId: NURSERY, childId: NO_CODE_CHILD, kind: 'scan' };
+  await assertFails(addDoc(kindReports, { ...base, location: GEO_FIX }));
+  await assertFails(addDoc(kindReports, { ...base, location: null, comment: 'hi' }));
+});
+
+await check('refuses an unknown kind and an over-long comment', async () => {
+  const base = { at: serverTimestamp(), location: null, nurseryId: NURSERY, childId: NO_CODE_CHILD };
+  await assertFails(addDoc(kindReports, { ...base, kind: 'found' }));
+  await assertFails(addDoc(kindReports, { ...base, kind: 'lost', comment: 'x'.repeat(501) }));
+  await assertFails(addDoc(kindReports, { ...base, kind: 'lost', comment: 42 }));
+});
+
+await check('still accepts a report from a page that predates kind', async () => {
+  await assertSucceeds(
+    addDoc(kindReports, { at: serverTimestamp(), location: null, nurseryId: NURSERY, childId: NO_CODE_CHILD }),
+  );
+});
+
+await check('the nursery reads every kind in its alerts query', async () => {
+  const snap = await assertSucceeds(
+    getDocs(
+      query(
+        collectionGroup(owner, 'foundReports'),
+        where('nurseryId', '==', NURSERY),
+        where('childId', '==', NO_CODE_CHILD),
+      ),
+    ),
+  );
+  const kinds = snap.docs.map((d) => d.data().kind ?? 'none').sort();
+  assert.deepEqual(kinds, ['lost', 'none', 'scan']);
 });
 
 await testEnv.cleanup();

@@ -23,8 +23,15 @@
  * `nurseryId` and `childId` come from the profile the page loaded, never from
  * the URL — a legacy `/c/{token}` link does not carry them at all, and the
  * rules compare both against that same parent profile.
+ *
+ * `kind` is 'scan' for the alert the page files on its own when it opens, and
+ * 'lost' for a finder pressing "This child is lost". A scan never carries a
+ * location or a comment — nobody was asked for either, and the rules refuse
+ * them — so both are dropped here rather than costing the nursery the alert.
+ * A lost report carries the finder's comment, trimmed and capped at
+ * COMMENT_MAX, and only when there is one.
  */
-export function buildFoundReport(profile, position, at) {
+export function buildFoundReport(profile, position, at, { kind = 'lost', comment = '' } = {}) {
   if (typeof profile?.nurseryId !== 'string' || profile.nurseryId === '') {
     throw new Error('The loaded profile has no nurseryId to stamp on the report.');
   }
@@ -32,13 +39,26 @@ export function buildFoundReport(profile, position, at) {
     throw new Error('The loaded profile has no childId to stamp on the report.');
   }
 
-  return {
+  if (kind !== 'scan' && kind !== 'lost') {
+    throw new Error(`Unknown report kind: ${kind}`);
+  }
+
+  const report = {
     at,
-    location: toLocation(position),
+    location: kind === 'scan' ? null : toLocation(position),
     nurseryId: profile.nurseryId,
     childId: profile.childId,
+    kind,
   };
+
+  const note = typeof comment === 'string' ? comment.trim().slice(0, COMMENT_MAX) : '';
+  if (kind === 'lost' && note !== '') report.comment = note;
+
+  return report;
 }
+
+/** The longest comment the rules accept on a lost report. */
+export const COMMENT_MAX = 500;
 
 /** `{ lat, lng }` when the position is usable, null otherwise. */
 export function toLocation(position) {

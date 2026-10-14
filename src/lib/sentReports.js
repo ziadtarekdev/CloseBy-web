@@ -47,3 +47,33 @@ export function forgetReport(profileId) {
     // Nothing to forget.
   }
 }
+
+// ── The automatic scan alert ────────────────────────────────────────────────
+//
+// The page files a 'scan' alert by itself when it opens. Without a memory of
+// that, every reload or return to the tab would file another one and bury the
+// nursery's feed in duplicates, so one scan per child is sent per
+// SCAN_COOLDOWN_MS from this phone. A separate key from the lost report above:
+// the finder's "This child is lost" must never be held back by a scan.
+
+const SCAN_KEY = 'closeby:scan:';
+const SCAN_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Whether a scan alert for this profile was already sent recently. */
+export function scanRecentlySent(profileId, now = Date.now()) {
+  if (typeof profileId !== 'string' || profileId === '') return false;
+  try {
+    const at = Number(sessionStorage.getItem(SCAN_KEY + profileId));
+    return Number.isFinite(at) && at > 0 && now - at < SCAN_COOLDOWN_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function rememberScan(profileId, now = Date.now()) {
+  try {
+    sessionStorage.setItem(SCAN_KEY + profileId, String(now));
+  } catch {
+    // Not remembered; a reload may send one more scan alert.
+  }
+}

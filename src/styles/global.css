@@ -230,6 +230,48 @@ body {
   background: var(--indigo-wash);
 }
 
+/* ── Child details: group and guardian ─────────────────────────────────── */
+
+.details {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--teal-tint);
+}
+
+.details h2 {
+  color: var(--teal-deep);
+}
+
+.details-list {
+  margin: 0 0 12px;
+}
+
+.details-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.details-row:last-child {
+  border-bottom: 0;
+}
+
+.details-row dt {
+  color: var(--ink-muted);
+  font-size: 15px;
+}
+
+.details-row dd {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .nursery-name {
   margin: 0 0 12px;
   font-size: 18px;
@@ -287,9 +329,63 @@ body {
   background: var(--sky-tint);
 }
 
+.btn-danger {
+  background: var(--coral-deep);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled),
+.btn-danger:active:not(:disabled) {
+  background: #9a2740;
+}
+
+.btn-text {
+  background: transparent;
+  color: var(--ink-muted);
+  min-height: 44px;
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* ── "This child is lost" form ─────────────────────────────────────────── */
+
+.report-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.report-form h2 {
+  margin: 0;
+  color: var(--coral-deep);
+}
+
+.field-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--indigo-ink);
+}
+
+.field-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 2px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--indigo-ink);
+  font: inherit;
+  font-size: 17px;
+  resize: vertical;
+}
+
+.field-input:focus-visible {
+  outline: none;
+  border-color: var(--indigo);
+  box-shadow: 0 0 0 3px var(--indigo-tint);
 }
 
 .privacy {

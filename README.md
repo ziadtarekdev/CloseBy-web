@@ -31,20 +31,27 @@ code is already printed.
 ## What it reads and writes
 
 Only two paths, both under the public snapshot. It never touches
-`nurseries/{uid}/children/{childId}`, which is where guardian name and phone
-live.
+`nurseries/{uid}/children/{childId}`, the private child record.
 
 ```
 publicProfiles/{profileId}                          ← get by id, anonymous
   {profileId} = {nurseryId}~{childId} for a current code, or a legacy token
-  nurseryId, childId, name, group, createdAt
+  nurseryId, childId, name, group, guardianName, guardianPhone, createdAt
   (the page also renders age, notes, nurseryName, nurseryPhone if present)
 
 publicProfiles/{profileId}/foundReports/{reportId}  ← create, anonymous
   at: serverTimestamp
-  location: { lat, lng } | null
+  location: { lat, lng } | null      (always null for a scan)
   nurseryId, childId
+  kind: 'scan' | 'lost'              (missing on older reports = 'lost')
+  comment: string ≤ 500              (lost reports only, optional)
 ```
+
+Opening the page files a `scan` report on its own, so the nursery sees that the
+code was scanned. A reload within 10 minutes does not file another
+(`src/lib/sentReports.js`). **"This child is lost"** opens a short form — a
+comment and a note that the browser will ask for location — and files a `lost`
+report, which the Flutter app shows as a danger alert.
 
 The report's `nurseryId` and `childId` are copied from the profile the page
 already loaded — never from the URL, which a legacy token link does not carry —
@@ -52,10 +59,12 @@ and the security rules verify both against that same parent profile before the
 write lands. The owning nursery's reads of reports are keyed on the stamped
 `nurseryId`, which is why the stamp exists at all.
 
-Today the Flutter app writes only `name` and `group` into the snapshot, so the
-page shows a name and a group. `age`, `notes`, `nurseryName` and `nurseryPhone`
-are rendered only when present — the page was built to get richer if the snapshot
-is extended, without needing a frontend change.
+The Flutter app writes `name`, `group`, `guardianName` and `guardianPhone`
+into the snapshot, plus the nursery contact when the nursery has set one. The
+guardian's name and phone are public on purpose: whoever scans the code can call
+the family directly. Pages published before the guardian fields existed show
+them once the child is edited or the code is regenerated. `age` and `notes`
+are rendered only when present.
 
 ### Why a separate public document
 
@@ -97,7 +106,7 @@ works under `npm run dev`; opening the built files over `file://` does not.
 ### Running against the local emulator
 
 `npm run dev` on its own reads the **live** project. To click through the whole
-flow — including "I found this child" — without writing real reports, run the
+flow — including "This child is lost" — without writing real reports, run the
 page against the Firestore emulator. Nothing in `.env.local` needs to change:
 variables already set in the shell take priority over `.env` files.
 
@@ -214,7 +223,7 @@ would otherwise address a different document than the QR intended.
 language in `src/lib/publicProfile.js`. Codes, project name and collection paths
 go to `console.error` only, for a developer in devtools.
 
-**"I found this child"** asks for location, then writes one report:
+**"This child is lost"** asks for location, then writes one `lost` report:
 
 - `at` is a Firestore server timestamp, never the device clock — a phone with a
   wrong time must not be able to make a report look older than it is.
@@ -223,9 +232,11 @@ go to `console.error` only, for a developer in devtools.
   tells the nursery where to start looking.
 - The button is disabled while in flight and hidden after success, so a double
   tap cannot file two sightings.
-- No name, no phone, no email. The rules enforce that too: a report with any
-  field other than `at`, `location`, `nurseryId` and `childId` is rejected, and
-  the two ids are checked against the profile the page was read from.
+- Nothing about the finder beyond an optional comment. The rules enforce that
+  too: a report with any field other than `at`, `location`, `nurseryId`,
+  `childId`, `kind` and `comment` is rejected, a scan may carry neither a
+  location nor a comment, and the two ids are checked against the profile the
+  page was read from.
 
 **Contact nursery** renders only when `nurseryPhone` exists. A nursery name on
 its own is information, not an action.

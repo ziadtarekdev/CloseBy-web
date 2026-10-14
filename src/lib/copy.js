@@ -27,14 +27,26 @@ export const copy = {
 
   contactNursery: 'Contact nursery',
   callNursery: (phone) => `Call ${phone}`,
-  groupLabel: 'Group',
+  groupLabel: 'Group / class',
+
+  detailsTitle: 'Child details',
+  guardianNameLabel: 'Guardian',
+  guardianPhoneLabel: 'Guardian phone',
+  callGuardian: (phone) => `Call guardian ${phone}`,
 
   reportTitle: 'Tell the nursery',
-  // Said before the browser's own prompt appears, so a finder is not surprised
-  // by it — and knows that saying no still sends the report.
   reportIntro:
-    'One tap sends the nursery the time and, if you allow it, your location. Your browser will ask first.',
-  reportIdle: 'I found this child',
+    'The nursery already knows this code was scanned. If the child is alone or lost, raise the alarm.',
+  reportIdle: 'This child is lost',
+  reportFormTitle: 'Report a lost child',
+  reportCommentLabel: 'Comment for the nursery (optional)',
+  reportCommentPlaceholder: 'Where you are, what the child is wearing, anything that helps…',
+  // Said before the browser's own prompt appears, so a finder is not surprised
+  // by it — and knows that saying no still sends the alert.
+  reportLocationAsk:
+    'Your browser will ask to share your location with the nursery. Saying no still sends the alert.',
+  reportSubmit: 'Send alert',
+  reportCancel: 'Cancel',
   reportLocating: 'Getting your location…',
   reportLocatingHint:
     'If your browser asks to use your location, tap Allow. Blocking it still sends the report.',
@@ -61,7 +73,7 @@ export const copy = {
   // while so a reload does not look like nothing was sent.
   reportAlreadySent: (time) => `You already told the nursery at ${time}.`,
   reportSendUpdate: 'Send an update',
-  reportUpdateHint: 'Sends a new report with your current location, if you share it.',
+  reportUpdateHint: 'Sends a new alert with your current location and comment.',
 
   privacyNote:
     'Only your approximate location is shared, and only with this nursery.',
@@ -72,14 +84,14 @@ export const copy = {
     'Stay with the child somewhere safe.',
     canCallNursery
       ? 'Call the nursery using the button above.'
-      : 'Tap “I found this child” so the nursery knows where to look.',
+      : 'Tap “This child is lost” so the nursery knows where to look.',
     'Do not take the child anywhere on your own.',
   ],
 
   // ── Home: opened without a code ────────────────────────────────────────
   homeTitle: 'Found a child wearing a CloseBy code?',
   homeBody:
-    'Scan the QR code on their clothing or badge. Their nursery’s page opens, and one tap tells the nursery where you are.',
+    'Scan the QR code on their clothing or badge. Their nursery’s page opens, and the nursery is told the code was scanned.',
   homeCameraTitle: 'Use your phone’s camera',
   homeCameraBody:
     'Open the camera app, point it at the code and tap the link that appears. No app to install.',

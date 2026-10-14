@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchPublicProfile, submitFoundReport } from '../lib/publicProfile';
 import { isSafeProfileId } from '../lib/childLink';
 import { getCurrentPosition } from '../lib/geolocation';
-import { forgetReport, recallReport, rememberReport } from '../lib/sentReports';
+import {
+  forgetReport,
+  recallReport,
+  rememberReport,
+  rememberScan,
+  scanRecentlySent,
+} from '../lib/sentReports';
 
 const STATUS = {
   loading: 'loading',
@@ -27,7 +33,11 @@ const REPORT = {
 const SLOW_AFTER_MS = 8000;
 
 /**
- * Loads the public profile for one QR link and files the sighting report.
+ * Loads the public profile for one QR link and files the alerts.
+ *
+ * Opening the page files a 'scan' alert on its own — the nursery learns that
+ * somebody scanned the code even if they do nothing else. `reportFound` files
+ * the 'lost' alert, with the finder's location and comment.
  *
  * Takes the profile's document id, already resolved from the URL by the page
  * that renders this hook — `uid~childId` from `/child?uid=..&id=..`, or a legacy
@@ -88,7 +98,19 @@ export function useChildProfile(profileId) {
   /** Reads the profile again, for the retry on the error screen. */
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
-  const reportFound = useCallback(async () => {
+  // The automatic scan alert, once the profile is known. Fire and forget: a
+  // finder never waits on it and never sees it fail, and the cooldown in
+  // sentReports.js keeps a reload from filing it again.
+  useEffect(() => {
+    if (status !== STATUS.ready || !profile) return;
+    if (scanRecentlySent(profileId)) return;
+    rememberScan(profileId);
+    submitFoundReport(profile, null, { kind: 'scan' }).catch(() => {
+      // Already logged by PublicProfileError; the page carries on regardless.
+    });
+  }, [status, profile, profileId]);
+
+  const reportFound = useCallback(async (comment = '') => {
     // A ref rather than the state, so two taps inside one render cannot both
     // get past the check and file two sightings.
     if (inFlight.current) return;
@@ -103,7 +125,7 @@ export function useChildProfile(profileId) {
     const slowTimer = setTimeout(() => setSlow(true), SLOW_AFTER_MS);
     try {
       // Resolves only once Firestore has accepted the write.
-      await submitFoundReport(profile, location);
+      await submitFoundReport(profile, location, { kind: 'lost', comment });
       const at = new Date();
       rememberReport(profileId, at);
       setPreviouslySentAt(at);

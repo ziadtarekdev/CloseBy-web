@@ -50,13 +50,17 @@ service cloud.firestore {
     }
 
     // A profile is written by the app, never by a scanner. Not every field is
-    // required: the app writes name and group today, and may add age, notes,
-    // nurseryName or nurseryPhone later without a rules change.
+    // required: the app writes name, group, the guardian's name and phone, and
+    // the nursery contact; age and notes may be added later without a rules
+    // change.
     //
-    // `hasOnly` is the load-bearing part. It is what makes this collection safe
-    // to open publicly — an owner cannot append a guardian's phone number or an
-    // auth token to a profile and have it become readable by anyone holding the
-    // QR code.
+    // The guardian's name and phone are public on purpose: whoever scans the
+    // code sees them so they can call the family directly. Everything else in
+    // the private child record stays private.
+    //
+    // `hasOnly` is the load-bearing part. It is what keeps this collection safe
+    // to open publicly — an owner cannot append any other field, such as an
+    // auth token, and have it become readable by anyone holding the QR code.
     function validPublicProfile(data) {
       return data.keys().hasAll(['nurseryId', 'childId', 'name', 'group'])
         && data.keys().hasOnly([
@@ -68,6 +72,8 @@ service cloud.firestore {
              'notes',
              'nurseryName',
              'nurseryPhone',
+             'guardianName',
+             'guardianPhone',
              'createdAt'
            ])
         && data.nurseryId is string
@@ -79,7 +85,9 @@ service cloud.firestore {
         && (!('age' in data) || (data.age is int && data.age >= 0 && data.age <= 18))
         && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
         && (!('nurseryName' in data) || (data.nurseryName is string && data.nurseryName.size() <= 120))
-        && (!('nurseryPhone' in data) || (data.nurseryPhone is string && data.nurseryPhone.size() <= 40));
+        && (!('nurseryPhone' in data) || (data.nurseryPhone is string && data.nurseryPhone.size() <= 40))
+        && (!('guardianName' in data) || (data.guardianName is string && data.guardianName.size() <= 120))
+        && (!('guardianPhone' in data) || (data.guardianPhone is string && data.guardianPhone.size() <= 40));
     }
 
     // A sighting report. The report carries the nursery and child id it belongs
@@ -91,6 +99,12 @@ service cloud.firestore {
     // stopped from backdating a report. `hasOnly` rejects any extra field, so
     // the anonymous write cannot be used to smuggle a name, a phone number or
     // anything else about the finder into the database.
+    //
+    // `kind` says what the finder did. 'scan' is filed by the page on its own
+    // when it opens: it carries no location and no comment, because nobody was
+    // asked for either. 'lost' is the finder pressing "This child is lost": it
+    // may carry their location and a short comment. A report without `kind`
+    // predates the field and is read as 'lost'.
     function validFoundReport(data) {
       let loc = data.location;
       let validLocation = loc == null || (
@@ -100,10 +114,17 @@ service cloud.firestore {
           && loc.lng is number && loc.lng >= -180 && loc.lng <= 180
       );
 
+      let kind = data.get('kind', 'lost');
+      let validComment = !('comment' in data)
+        || (kind == 'lost' && data.comment is string && data.comment.size() <= 500);
+
       return data.keys().hasAll(['at', 'location', 'nurseryId', 'childId'])
-        && data.keys().hasOnly(['at', 'location', 'nurseryId', 'childId'])
+        && data.keys().hasOnly(['at', 'location', 'nurseryId', 'childId', 'kind', 'comment'])
         && data.nurseryId is string
         && data.childId is string
+        && kind in ['scan', 'lost']
+        && (kind == 'lost' || loc == null)
+        && validComment
         && validLocation;
     }
 

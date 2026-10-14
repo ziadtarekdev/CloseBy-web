@@ -1,10 +1,10 @@
 // How the public page talks to Firestore.
 //
 // The only collection it touches is `publicProfiles/{profileId}` — the safe
-// snapshot the Flutter app writes when a QR is generated. It never reads
-// `nurseries/{uid}/children/{childId}`, which holds guardian name and phone, so
-// there is no code path on this page that can fetch private data even if the
-// rules were wrong.
+// snapshot the Flutter app writes when a QR is generated, which carries the
+// child's name and group and the guardian's name and phone. It never reads
+// `nurseries/{uid}/children/{childId}`, the private record, so there is no code
+// path on this page that can fetch anything else even if the rules were wrong.
 //
 // The document id is passed in already resolved and already validated, by
 // childLink.js: `uid~childId` for a current QR code, or a bare legacy token for
@@ -56,13 +56,17 @@ export async function fetchPublicProfile(profileId) {
  *
  * `at` uses the Firestore server timestamp, never the device clock: a phone
  * with a wrong time must not be able to make a report look older than it is.
+ *
+ * `options` is `{ kind, comment }`, passed through to buildFoundReport: a
+ * 'scan' when the page opens, a 'lost' report with an optional comment when
+ * the finder asks for help.
  */
-export async function submitFoundReport(profile, location) {
+export async function submitFoundReport(profile, location, options) {
   try {
     // `location` is geolocation.js's `{ lat, lng }` or null; buildFoundReport
     // is the one place that maps it, and the emulator suite files its reports
     // through the same function.
-    const payload = buildFoundReport(profile, location, serverTimestamp());
+    const payload = buildFoundReport(profile, location, serverTimestamp(), options);
 
     const reports = collection(db, PUBLIC_PROFILES, profile.id, FOUND_REPORTS);
     // addDoc resolves only once the backend has acknowledged the write, so
@@ -99,6 +103,8 @@ function normalizeProfile(id, data) {
     notes: asString(data?.notes) ?? '',
     nurseryName: asString(data?.nurseryName) ?? '',
     nurseryPhone: asString(data?.nurseryPhone) ?? '',
+    guardianName: asString(data?.guardianName) ?? '',
+    guardianPhone: asString(data?.guardianPhone) ?? '',
   };
 }
 
