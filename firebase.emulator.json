@@ -1,0 +1,24 @@
+{
+  "//": "Local-only emulator config. Nothing here is ever deployed: `firebase deploy` uses firebase.json, so the firestore block below cannot reach the live project by accident. It exists so `npm run test:local` can hold the page to the rules it will actually run under.",
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "cleanUrls": true,
+    "trailingSlash": false,
+    "rewrites": [
+      { "source": "/child", "destination": "/index.html" },
+      { "source": "/c/**", "destination": "/index.html" },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules.proposed"
+  },
+  "emulators": {
+    "//": "Not the conventional 8080/5000: something else on this machine already holds 8080. scripts/local-test.mjs reads these ports rather than repeating them, and VITE_FIRESTORE_EMULATOR_PORT in .env.local has to match the firestore one.",
+    "hosting": { "port": 5099 },
+    "firestore": { "port": 8180 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

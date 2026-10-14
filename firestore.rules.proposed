@@ -1,0 +1,342 @@
+rules_version = '2';
+
+// Cloud Firestore security rules for CloseBy.
+//
+// ---------------------------------------------------------------------------
+// TEST MIRROR — do not deploy from this directory.
+//
+// This file is a byte-for-byte copy of close_by/firestore.rules, which is the
+// project's source of truth. firebase.emulator.json points the Firestore
+// emulator at THIS file, so `npm run test:local` judges the page by the exact
+// rules that deploy from close_by. If the two ever drift, the tests stop
+// meaning anything: when close_by/firestore.rules changes, copy it over this
+// file unchanged.
+//
+// There is no firestore.rules in this directory on purpose — a second live copy
+// would drift.
+// ---------------------------------------------------------------------------
+//
+// Deploy the real file with:
+//   firebase deploy --only firestore:rules      (from close_by)
+//
+// Every account in CloseBy is its own nursery. A nursery's children live at
+//   nurseries/{uid}/children/{childId}
+// where {uid} is the account that owns them. The rules below make that a
+// server-side guarantee rather than something the app is trusted to do: the uid
+// in the path is compared against the uid Firebase authenticated, so a document
+// belonging to one nursery cannot be read or written by another, even by a
+// client that asks for it by hand.
+//
+// Two surfaces are public: the `publicProfiles` snapshot a scanned QR code
+// opens, readable by exact document id only, and the sighting reports a finder
+// can file under one profile. Everything else requires a signed-in user whose
+// uid matches the nursery in the path.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The account behind this request. Everything below depends on it, so a
+    // request without one is refused everywhere.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ═══ PUBLIC PAGE ═══════════════════════════════════════════════════════
+
+    // The signed-in account owns this nursery. Same comparison as
+    // isOwnNursery, named for the public block where the nursery id is a field
+    // on the document rather than a segment of the path.
+    function isOwner(nurseryId) {
+      return isSignedIn() && request.auth.uid == nurseryId;
+    }
+
+    // A profile is written by the app, never by a scanner. Not every field is
+    // required: the app writes name and group today, and may add age, notes,
+    // nurseryName or nurseryPhone later without a rules change.
+    //
+    // `hasOnly` is the load-bearing part. It is what makes this collection safe
+    // to open publicly — an owner cannot append a guardian's phone number or an
+    // auth token to a profile and have it become readable by anyone holding the
+    // QR code.
+    function validPublicProfile(data) {
+      return data.keys().hasAll(['nurseryId', 'childId', 'name', 'group'])
+        && data.keys().hasOnly([
+             'nurseryId',
+             'childId',
+             'name',
+             'group',
+             'age',
+             'notes',
+             'nurseryName',
+             'nurseryPhone',
+             'createdAt'
+           ])
+        && data.nurseryId is string
+        && data.childId is string
+        && data.name is string
+        && data.name.size() <= 120
+        && data.group is string
+        && data.group.size() <= 80
+        && (!('age' in data) || (data.age is int && data.age >= 0 && data.age <= 18))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && (!('nurseryName' in data) || (data.nurseryName is string && data.nurseryName.size() <= 120))
+        && (!('nurseryPhone' in data) || (data.nurseryPhone is string && data.nurseryPhone.size() <= 40));
+    }
+
+    // A sighting report. The report carries the nursery and child id it belongs
+    // to, because a subcollection document cannot be tied to an owner by its
+    // path — the owning nursery's reads are only checkable against a field on
+    // the report itself.
+    //
+    // `at` must equal request.time, which is the only way a caller can be
+    // stopped from backdating a report. `hasOnly` rejects any extra field, so
+    // the anonymous write cannot be used to smuggle a name, a phone number or
+    // anything else about the finder into the database.
+    function validFoundReport(data) {
+      let loc = data.location;
+      let validLocation = loc == null || (
+             loc.keys().hasOnly(['lat', 'lng'])
+          && loc.keys().hasAll(['lat', 'lng'])
+          && loc.lat is number && loc.lat >= -90 && loc.lat <= 90
+          && loc.lng is number && loc.lng >= -180 && loc.lng <= 180
+      );
+
+      return data.keys().hasAll(['at', 'location', 'nurseryId', 'childId'])
+        && data.keys().hasOnly(['at', 'location', 'nurseryId', 'childId'])
+        && data.nurseryId is string
+        && data.childId is string
+        && validLocation;
+    }
+
+    // The stamped ids must be the parent profile's own. A report whose
+    // nurseryId pointed anywhere else would be readable by a nursery this child
+    // does not belong to, so the values the browser sends are never trusted —
+    // they are compared against the document the QR resolves to. exists()
+    // comes first, so a missing parent is an explicit refusal and the get()
+    // never runs against a document that is not there.
+    function validReportIds(data, profileId) {
+      let parent = /databases/$(database)/documents/publicProfiles/$(profileId);
+      return exists(parent)
+        && get(parent).data.nurseryId == data.nurseryId
+        && get(parent).data.childId == data.childId;
+    }
+
+    // The safe snapshot of one child, publicly readable by exact document id.
+    //
+    // Two id shapes live here. A current QR code names the document
+    // `{nurseryId}~{childId}` because the URL carries both ids and the document
+    // has to be addressable from them alone. A code printed before the URL
+    // carried the ids addresses a random token instead, and those documents stay
+    // readable so a bracelet that is already printed keeps working.
+    //
+    // `~` is the separator because neither a Firebase Auth uid nor a Firestore
+    // auto-ID can contain it — both are base64url. With `_` or `-` the mapping
+    // would not be injective and two children could share a document.
+    match /publicProfiles/{profileId} {
+
+      // Single-document read by exact id — what the QR page does. `list` is not
+      // granted: without it the collection cannot be enumerated, so knowing one
+      // child's link does not lead to another's.
+      allow get: if true;
+      allow list: if false;
+
+      // The document id must be the child's own nursery and child id, and
+      // nothing else. This is what stops one nursery poisoning another's public
+      // page: with a name-derived id, nursery A could create the document
+      // `publicProfiles/{B_uid}~{B_childId}` — it is A's profile as far as
+      // `create` is concerned, because A wrote it — and B's page, which reads
+      // exactly that path, would then show whatever A chose. Requiring the id to
+      // match the contents means A can only ever write under A's own uid.
+      //
+      // Only `create` needs this. `update` is already confined to a document
+      // whose stored nurseryId is the caller's, so by the time a document exists
+      // at a foreign key it is the victim's, and the owner check refuses it. Not
+      // applying the same test to `update` is deliberate: it keeps the legacy
+      // token-keyed documents editable, so a nursery can still refresh a child's
+      // name on a code that was printed before the URL change.
+      allow create: if isOwner(request.resource.data.nurseryId)
+                    && request.resource.data.nurseryId
+                         + '~' + request.resource.data.childId == profileId
+                    && validPublicProfile(request.resource.data);
+
+      allow update: if isOwner(resource.data.nurseryId)
+                    && request.resource.data.nurseryId == resource.data.nurseryId
+                    && request.resource.data.childId == resource.data.childId
+                    && validPublicProfile(request.resource.data);
+
+      // A delete of a document that does not exist has no resource to read the
+      // owner from, so `isOwner(resource.data.nurseryId)` errors and the
+      // request is refused. The app deletes the page in the same batch as the
+      // child, and a child whose code was never generated has no page, so that
+      // refusal failed the whole delete. Deleting nothing changes nothing, so a
+      // signed-in caller may do it; an existing page still needs its owner.
+      allow delete: if (resource == null && isSignedIn())
+                    || (resource != null && isOwner(resource.data.nurseryId));
+
+      // Sighting reports: anonymous create with the exact shape above, and no
+      // anonymous read at all. Reads belong to the owning nursery only, keyed on
+      // the stamped nurseryId — so a `list` has to filter on nurseryId, which is
+      // what the reports repository is expected to send. Reports are immutable
+      // for now; a resolve/status workflow would be a deliberate, separate
+      // change.
+      match /foundReports/{reportId} {
+        // Shape and parent before `at`, so a refused write is decided by one
+        // of those two explicit checks. Every create carries a
+        // serverTimestamp() sentinel, and the refusal detail can carry an
+        // evaluation error from the engine's handling of it — that always
+        // contributes false, never a grant.
+        allow create: if validFoundReport(request.resource.data)
+                      && validReportIds(request.resource.data, profileId)
+                      && request.resource.data.at == request.time;
+
+        allow get, list: if isOwner(resource.data.nurseryId);
+
+        allow update, delete: if false;
+      }
+    }
+
+    // The nursery-wide read of its sightings, by collection group. A
+    // collection-group query is judged only by a rule shaped like this one —
+    // the path-nested rule above is invisible to it — and the same stamped
+    // nurseryId is what makes the query provable: the Flutter app filters on
+    // where('nurseryId', '==', its own uid), and the engine checks every
+    // result the query could return against that. Without the filter the
+    // query is refused, never narrowed.
+    match /{path=**}/foundReports/{reportId} {
+      allow get, list: if isOwner(resource.data.nurseryId);
+
+      allow create, update, delete: if false;
+    }
+
+    // ═══ END PUBLIC PAGE ═══════════════════════════════════════════════════
+
+    // True only for the nursery the signed-in account owns.
+    //
+    // This is the whole access model: you may read and write your own nursery
+    // and nothing else. There is no shared collection and no blanket allow, so
+    // there is no path by which one nursery's children become another's.
+    function isOwnNursery(nurseryId) {
+      return isSignedIn() && request.auth.uid == nurseryId;
+    }
+
+    // A child document must carry the fields the add-child form collects.
+    // Checked on create and update so a partial or malformed write is rejected
+    // by the server rather than reaching the list as a broken row.
+    function validChild() {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+          'name',
+          'age',
+          'group',
+          'guardianName',
+          'guardianPhone',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 120
+        && data.age is int
+        && data.age >= 1
+        && data.age <= 12
+        && data.group is string
+        && data.group.size() > 0
+        && data.group.size() <= 80
+        && data.guardianName is string
+        && data.guardianName.size() > 0
+        && data.guardianName.size() <= 120
+        && data.guardianPhone is string
+        && data.guardianPhone.size() > 0
+        && data.guardianPhone.size() <= 40;
+    }
+
+    // The nursery itself: the account's own details document, and its children.
+    // The nursery document holds only what the nursery chose to make public —
+    // the name and phone the QR page shows. The app copies these onto each
+    // child's public profile; nothing here is ever read anonymously. A closed
+    // field list keeps a guardian's details, or anything else, from being
+    // parked on this document and later copied out to the public page.
+    function validNursery() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['publicName', 'publicPhone', 'updatedAt'])
+        && (!('publicName' in data)
+            || (data.publicName is string && data.publicName.size() <= 120))
+        && (!('publicPhone' in data)
+            || (data.publicPhone is string && data.publicPhone.size() <= 40))
+        && (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    // A nursery's "handled" marker for one sighting report. Reports themselves
+    // are immutable, so resolving one is a separate document in the nursery's
+    // own space, keyed by the report id. Exactly two fields, and the time is
+    // the server's.
+    function validAlertState() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['status', 'resolvedAt'])
+        && data.keys().hasAll(['status', 'resolvedAt'])
+        && data.status == 'resolved'
+        && data.resolvedAt == request.time;
+    }
+
+    match /nurseries/{nurseryId} {
+      allow read: if isOwnNursery(nurseryId);
+      allow create, update: if isOwnNursery(nurseryId) && validNursery();
+      allow delete: if isOwnNursery(nurseryId);
+
+      // Which of this nursery's sighting reports it has marked resolved.
+      match /alertStates/{reportId} {
+        allow read: if isOwnNursery(nurseryId);
+        allow create, update: if isOwnNursery(nurseryId) && validAlertState();
+        allow delete: if isOwnNursery(nurseryId);
+      }
+
+      // This nursery's children. The parent match already restricts the path,
+      // but isOwnNursery is repeated on every line so each rule reads as a
+      // complete statement of who may act — and so a future rule added to this
+      // block cannot accidentally rely on the parent's condition alone.
+      match /children/{childId} {
+        allow read: if isOwnNursery(nurseryId);
+
+        // The document id is chosen by the server, so a client cannot overwrite
+        // another child's record by supplying one.
+        allow create: if isOwnNursery(nurseryId) && validChild();
+
+        // createdAt is immutable, so an edit cannot rewrite when a child was
+        // registered. The diff limits the change to the fields the form collects,
+        // so an edit cannot reach anything else on the document either.
+        //
+        // qrToken, qrUrl and qrGeneratedAt are written by generateQr rather than
+        // by the form; a regeneration also deletes the legacy qrToken. They hold
+        // no personal data, and without them the server rejects every QR
+        // generation with permission-denied.
+        allow update: if isOwnNursery(nurseryId)
+          && validChild()
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly([
+                 'name',
+                 'age',
+                 'group',
+                 'guardianName',
+                 'guardianPhone',
+                 'notes',
+                 'qrActive',
+                 'lastScan',
+                 'updatedAt',
+                 'qrToken',
+                 'qrUrl',
+                 'qrGeneratedAt'
+               ]);
+
+        allow delete: if isOwnNursery(nurseryId);
+      }
+    }
+
+    // Everything else — a flat legacy `children` collection, alerts, dashboard
+    // data, anything added later — is denied until it is given its own rules
+    // here. An unmatched path falling through to a blanket allow is how one
+    // nursery's child records end up readable by another.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
